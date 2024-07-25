@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Weather App</title>
+    <!-- Incluye el CSS de Bootstrap para el diseño de la página -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Incluye jQuery para facilitar la manipulación del DOM y las solicitudes AJAX -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Weather App</h1>
+        <div class="form-group">
+            <!-- Campo de entrada para ingresar el nombre de la ciudad -->
+            <input type="text" id="cityInput" class="form-control" placeholder="Enter city">
+            <!-- Botón para buscar el clima de la ciudad ingresada -->
+            <button id="searchButton" class="btn btn-primary mt-2">Search</button>
+        </div>
+        <div id="weatherData" class="mt-4">
+            <!-- Los datos del clima serán mostrados aquí -->
+        </div>
+        <div id="map-canvas" style="height: 500px; width: 100%;"></div>
+    </div>
+    <script>
+        // Variables globales
+        let map; // Variable para almacenar el objeto del mapa
+        let gettingData = false; // Variable para controlar el estado de la solicitud de datos
+        let request; // Variable para almacenar la solicitud XMLHttpRequest
+        let geoJSON; // Variable para almacenar los datos en formato GeoJSON
+        const openWeatherMapKey = "f70fd1eb9fb8c63c6a242766f8f90670"; // Clave de la API de OpenWeatherMap
+
+        // Función para inicializar el mapa de Google Maps
+        function initializeMap() {
+            // Obtiene el valor del campo de entrada (nombre de la ciudad)
+            const city = document.getElementById('cityInput').value;
+            const geocoder = new google.maps.Geocoder();
+            // Geocodifica el nombre de la ciudad para obtener sus coordenadas
+            geocoder.geocode({ 'address': city }, function(results, status) {
+                if (status === 'OK') {
+                    const mapOptions = {
+                        zoom: 7,
+                        center: results[0].geometry.location
+                    };
+                    // Inicializa el mapa con las opciones especificadas
+                    map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);
+
+                    // Agrega un listener para verificar si se necesitan datos cuando el mapa esté inactivo
+                    google.maps.event.addListener(map, 'idle', checkIfDataRequested);
+
+                    const infowindow = new google.maps.InfoWindow();
+                    // Agrega un listener para mostrar una ventana de información cuando se haga clic en un marcador del mapa
+                    map.data.addListener('click', function(event) {
+                        infowindow.setContent(
+                            "<img src=" + event.feature.getProperty("icon") + ">" +
+                            "<br /><strong>" + event.feature.getProperty("city") + "</strong>" +
+                            "<br />" + event.feature.getProperty("temperature") + "&deg;C" +
+                            "<br />" + event.feature.getProperty("weather")
+                        );
+                        infowindow.setOptions({
+                            position: {
+                                lat: event.latLng.lat(),
+                                lng: event.latLng.lng()
+                            },
+                            pixelOffset: {
+                                width: 0,
+                                height: -15
+                            }
+                        });
+                        infowindow.open(map);
+                    });
+                } else {
+                    alert('Geocode was not successful for the following reason: ' + status);
+                }
+            });
+        }
+
+        // Función para verificar si se necesitan datos (cuando el mapa esté inactivo)
+        function checkIfDataRequested() {
+            while (gettingData === true) {
+                request.abort();
+                gettingData = false;
+            }
+            getCoords();
+        }
+
+        // Función para obtener las coordenadas del mapa
+        function getCoords() {
+            const bounds = map.getBounds();
+            const NE = bounds.getNorthEast();
+            const SW = bounds.getSouthWest();
+            // Llama a la función getWeather con las coordenadas del mapa
+            getWeather(NE.lat(), NE.lng(), SW.lat(), SW.lng());
+        }
+
+        // Función para obtener el clima usando las coordenadas del mapa
+        function getWeather(northLat, eastLng, southLat, westLng) {
+            gettingData = true;
+            const requestString = "http://api.openweathermap.org/data/2.5/box/city?bbox=" +
+                westLng + "," + northLat + "," +
+                eastLng + "," + southLat + "," +
+                map.getZoom() +
+                "&cluster=yes&format=json" +
+                "&APPID=" + openWeatherMapKey;
+            request = new XMLHttpRequest();
+            request.onload = processResults;
+            request.open("get", requestString, true);
+            request.send();
+        }
+
+        // Función para procesar los resultados de la solicitud de clima
+        function processResults() {
+            const results = JSON.parse(this.responseText);
+            if (results.list.length > 0) {
+                resetData();
+                for (let i = 0; i < results.list.length; i++) {
+                    geoJSON.features.push(jsonToGeoJson(results.list[i]));
+                }
+                drawIcons(geoJSON);
+            }
+        }
+
+        // Función para convertir los datos del clima en formato GeoJSON
+        function jsonToGeoJson(weatherItem) {
+            const feature = {
+                type: "Feature",
+                properties: {
+                    city: weatherItem.name,
+                    weather: weatherItem.weather[0].main,
+                    temperature: weatherItem.main.temp,
+                    min: weatherItem.main.temp_min,
+                    max: weatherItem.main.temp_max,
+                    humidity: weatherItem.main.humidity,
+                    pressure: weatherItem.main.pressure,
+                    windSpeed: weatherItem.wind.speed,
+                    windDegrees: weatherItem.wind.deg,
+                    windGust: weatherItem.wind.gust,
+                    icon: "http://openweathermap.org/img/w/" + weatherItem.weather[0].icon + ".png",
+                    coordinates: [weatherItem.coord.Lon, weatherItem.coord.Lat]
+                },
+                geometry: {
+                    type: "Point",
+                    coordinates: [weatherItem.coord.Lon, weatherItem.coord.Lat]
+                }
+            };
+            map.data.setStyle(function(feature) {
+                return {
+                    icon: {
+                        url: feature.getProperty('icon'),
+                        anchor: new google.maps.Point(25, 25)
+                    }
+                };
+            });
+            return feature;
+        }
+
+        // Función para dibujar los íconos en el mapa
+        function drawIcons(weather) {
+            map.data.addGeoJson(geoJSON);
+            gettingData = false;
+        }
+
+        // Función para reiniciar los datos del mapa
+        function resetData() {
+            geoJSON = {
+                type: "FeatureCollection",
+                features: []
+            };
+            map.data.forEach(function(feature) {
+                map.data.remove(feature);
+            });
+        }
+
+        // Función para cargar el script de Google Maps
+        function loadGoogleMaps() {
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=f70fd1eb9fb8c63c6a242766f8f90670&callback=initializeMap`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+        }
+
+        // Espera a que el documento esté listo para configurar el evento del botón
+        $(document).ready(function() {
+            $('#searchButton').click(function() {
+                const city = $('#cityInput').val();
+                // Realiza una solicitud AJAX para obtener los datos del clima
+                $.ajax({
+                    url: `/weather/${city}`,
+                    method: 'GET',
+                    success: function(data) {
+                        // Muestra los datos del clima en la página
+                        $('#weatherData').html(`
+                            <h3>${data.name}</h3>
+                            <p>Temperature: ${data.main.temp} °C</p>
+                            <p>Description: ${data.weather[0].description}</p>
+                        `);
+                        loadGoogleMaps(); // Carga el mapa de Google Maps
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
